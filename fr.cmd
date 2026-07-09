@@ -2,8 +2,10 @@
 setlocal
 
 set "ROOT=%~dp0"
-if exist "%ROOT%dist\fr\fr.exe" (
-    "%ROOT%dist\fr\fr.exe" %*
+set "FRCMD_HOME=%ROOT%"
+
+if exist "%ROOT%dist\fr.exe" (
+    "%ROOT%dist\fr.exe" %*
     exit /b %ERRORLEVEL%
 )
 

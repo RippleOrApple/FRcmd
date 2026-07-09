@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .agents/
+config/
 shortcuts/
 build/
 dist/
