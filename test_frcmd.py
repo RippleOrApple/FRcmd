@@ -59,12 +59,15 @@ class ShortcutLoadingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / f"{WECHAT}.lnk").write_text("", encoding="utf-8")
-            (root / "aliases.json").write_text(
+            config_root = root / "config"
+            config_root.mkdir()
+            (config_root / "aliases.json").write_text(
                 '{"\u5fae\u4fe1": ["wx", "\u5fae"]}',
                 encoding="utf-8",
             )
 
-            shortcuts = frcmd.list_shortcuts(root)
+            with mock.patch.dict(os.environ, {"FRCMD_HOME": str(root)}):
+                shortcuts = frcmd.list_shortcuts(root)
 
             self.assertEqual(
                 shortcuts,
@@ -72,11 +75,11 @@ class ShortcutLoadingTests(unittest.TestCase):
             )
 
     def test_list_shortcuts_uses_valid_index_cache(self):
-        with tempfile.TemporaryDirectory() as appdata_temp, tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as install_temp, tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "QQ.lnk").write_text("", encoding="utf-8")
 
-            with mock.patch.dict(os.environ, {"APPDATA": appdata_temp}):
+            with mock.patch.dict(os.environ, {"FRCMD_HOME": install_temp}):
                 first = frcmd.list_shortcuts(root)
                 with mock.patch.object(frcmd, "build_shortcut_index") as build_index:
                     second = frcmd.list_shortcuts(root)
@@ -85,11 +88,11 @@ class ShortcutLoadingTests(unittest.TestCase):
         build_index.assert_not_called()
 
     def test_list_shortcuts_rebuilds_when_directory_changes(self):
-        with tempfile.TemporaryDirectory() as appdata_temp, tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as install_temp, tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "QQ.lnk").write_text("", encoding="utf-8")
 
-            with mock.patch.dict(os.environ, {"APPDATA": appdata_temp}):
+            with mock.patch.dict(os.environ, {"FRCMD_HOME": install_temp}):
                 first = frcmd.list_shortcuts(root)
                 (root / f"{WECHAT}.lnk").write_text("", encoding="utf-8")
                 second = frcmd.list_shortcuts(root)
@@ -153,15 +156,78 @@ class TransferShortcutTests(unittest.TestCase):
 
 class ConfigTests(unittest.TestCase):
     def test_ensure_configured_bootstraps_default_config(self):
-        with tempfile.TemporaryDirectory() as appdata_temp:
-            with mock.patch.dict(os.environ, {"APPDATA": appdata_temp}), mock.patch.object(
+        with tempfile.TemporaryDirectory() as appdata_temp, tempfile.TemporaryDirectory() as install_temp:
+            with mock.patch.dict(os.environ, {"APPDATA": appdata_temp, "FRCMD_HOME": install_temp}), mock.patch.object(
                 frcmd, "transfer_shortcuts", return_value=(0, 0)
             ) as transfer:
                 shortcut_dir = frcmd.ensure_configured()
 
-            self.assertEqual(shortcut_dir, Path(appdata_temp) / "FRcmd" / "shortcuts")
-            self.assertTrue((Path(appdata_temp) / "FRcmd" / "config.json").exists())
+            self.assertEqual(shortcut_dir, Path(install_temp) / "shortcuts")
+            self.assertTrue((Path(install_temp) / "config" / "config.json").exists())
             transfer.assert_called_once_with(shortcut_dir)
+
+    def test_default_shortcut_dir_uses_install_dir(self):
+        with tempfile.TemporaryDirectory() as install_temp:
+            with mock.patch.dict(os.environ, {"FRCMD_HOME": install_temp}):
+                shortcut_dir = frcmd.default_shortcut_dir()
+
+        self.assertEqual(shortcut_dir, Path(install_temp) / "shortcuts")
+
+    def test_frozen_dist_exe_uses_project_root_as_install_dir(self):
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(frcmd.sys, "frozen", True, create=True), mock.patch.object(
+            frcmd.sys, "executable", str(Path("D:/Tools/FRcmd/dist/fr.exe"))
+        ):
+            install_dir = frcmd.install_dir()
+
+        self.assertEqual(install_dir, Path("D:/Tools/FRcmd"))
+
+    def test_settings_and_index_paths_use_install_config_dir(self):
+        with tempfile.TemporaryDirectory() as install_temp:
+            with mock.patch.dict(os.environ, {"FRCMD_HOME": install_temp}):
+                self.assertEqual(frcmd.settings_path(), Path(install_temp) / "config" / "config.json")
+                self.assertEqual(frcmd.index_path(), Path(install_temp) / "config" / "index.json")
+                self.assertEqual(frcmd.aliases_path(), Path(install_temp) / "config" / "aliases.json")
+
+    def test_load_config_reads_legacy_appdata_config(self):
+        with tempfile.TemporaryDirectory() as appdata_temp, tempfile.TemporaryDirectory() as install_temp:
+            legacy_dir = Path(appdata_temp) / "FRcmd"
+            legacy_dir.mkdir()
+            legacy_config = legacy_dir / "config.json"
+            legacy_config.write_text(json.dumps({"shortcut_dir": "D:\\OldShortcuts"}), encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"APPDATA": appdata_temp, "FRCMD_HOME": install_temp}):
+                config = frcmd.load_config()
+
+        self.assertEqual(config, {"shortcut_dir": "D:\\OldShortcuts"})
+
+    def test_add_alias_writes_config_alias_file(self):
+        with tempfile.TemporaryDirectory() as install_temp, tempfile.TemporaryDirectory() as shortcut_temp:
+            shortcut_dir = Path(shortcut_temp)
+            (shortcut_dir / f"{NETEASE_MUSIC}.lnk").write_text("", encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"FRCMD_HOME": install_temp}):
+                added = frcmd.add_alias(NETEASE_MUSIC, "music", shortcut_dir)
+                aliases = json.loads((Path(install_temp) / "config" / "aliases.json").read_text(encoding="utf-8"))
+                shortcuts = frcmd.list_shortcuts(shortcut_dir)
+
+        self.assertTrue(added)
+        self.assertEqual(aliases, {NETEASE_MUSIC: ["music"]})
+        self.assertEqual(frcmd.match_shortcut("music", shortcuts).name, NETEASE_MUSIC)
+
+    def test_prompt_add_alias_matches_existing_shortcut(self):
+        with tempfile.TemporaryDirectory() as install_temp, tempfile.TemporaryDirectory() as shortcut_temp:
+            shortcut_dir = Path(shortcut_temp)
+            (shortcut_dir / f"{NETEASE_MUSIC}.lnk").write_text("", encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"FRCMD_HOME": install_temp}), mock.patch.object(
+                frcmd, "ensure_configured", return_value=shortcut_dir
+            ), mock.patch("builtins.input", side_effect=["wyy", "y", "music"]):
+                code = frcmd.prompt_add_alias()
+
+            aliases = json.loads((Path(install_temp) / "config" / "aliases.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(aliases, {NETEASE_MUSIC: ["music"]})
 
     def test_open_config_dir_uses_file_manager(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -202,18 +268,18 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(frcmd.config_dir_under_parent("D:\\Tools"), Path("D:\\Tools") / "shortcuts")
 
     def test_move_config_dir_moves_items_and_updates_config(self):
-        with tempfile.TemporaryDirectory() as appdata_temp, tempfile.TemporaryDirectory() as current_temp, tempfile.TemporaryDirectory() as target_temp:
+        with tempfile.TemporaryDirectory() as install_temp, tempfile.TemporaryDirectory() as current_temp, tempfile.TemporaryDirectory() as target_temp:
             current = Path(current_temp)
             target_parent = Path(target_temp) / "new-parent"
             target = target_parent / "shortcuts"
             (current / "QQ.lnk").write_text("qq", encoding="utf-8")
 
-            with mock.patch.dict(os.environ, {"APPDATA": appdata_temp}), mock.patch.object(
+            with mock.patch.dict(os.environ, {"FRCMD_HOME": install_temp}), mock.patch.object(
                 frcmd, "ensure_configured", return_value=current
             ):
                 code = frcmd.move_config_dir(str(target_parent))
 
-            config = json.loads((Path(appdata_temp) / "FRcmd" / "config.json").read_text(encoding="utf-8"))
+            config = json.loads((Path(install_temp) / "config" / "config.json").read_text(encoding="utf-8"))
 
             self.assertEqual(code, 0)
             self.assertTrue((target / "QQ.lnk").exists())
@@ -221,7 +287,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config["shortcut_dir"], str(target))
 
     def test_move_config_dir_does_not_overwrite_existing_files(self):
-        with tempfile.TemporaryDirectory() as appdata_temp, tempfile.TemporaryDirectory() as current_temp, tempfile.TemporaryDirectory() as target_temp:
+        with tempfile.TemporaryDirectory() as install_temp, tempfile.TemporaryDirectory() as current_temp, tempfile.TemporaryDirectory() as target_temp:
             current = Path(current_temp)
             target_parent = Path(target_temp)
             target = target_parent / "shortcuts"
@@ -229,7 +295,7 @@ class ConfigTests(unittest.TestCase):
             (current / "QQ.lnk").write_text("source", encoding="utf-8")
             (target / "QQ.lnk").write_text("target", encoding="utf-8")
 
-            with mock.patch.dict(os.environ, {"APPDATA": appdata_temp}), mock.patch.object(
+            with mock.patch.dict(os.environ, {"FRCMD_HOME": install_temp}), mock.patch.object(
                 frcmd, "ensure_configured", return_value=current
             ):
                 code = frcmd.move_config_dir(str(target_parent))
@@ -238,8 +304,8 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual((target / "QQ.lnk").read_text(encoding="utf-8"), "target")
             self.assertEqual((current / "QQ.lnk").read_text(encoding="utf-8"), "source")
 
-    def test_move_config_dir_only_moves_managed_config_items(self):
-        with tempfile.TemporaryDirectory() as appdata_temp, tempfile.TemporaryDirectory() as current_temp, tempfile.TemporaryDirectory() as target_temp:
+    def test_move_config_dir_only_moves_shortcuts(self):
+        with tempfile.TemporaryDirectory() as install_temp, tempfile.TemporaryDirectory() as current_temp, tempfile.TemporaryDirectory() as target_temp:
             current = Path(current_temp)
             target = Path(target_temp) / "shortcuts"
             (current / ".git").mkdir()
@@ -247,16 +313,17 @@ class ConfigTests(unittest.TestCase):
             (current / "QQ.lnk").write_text("qq", encoding="utf-8")
             (current / "aliases.json").write_text("{}", encoding="utf-8")
 
-            with mock.patch.dict(os.environ, {"APPDATA": appdata_temp}), mock.patch.object(
+            with mock.patch.dict(os.environ, {"FRCMD_HOME": install_temp}), mock.patch.object(
                 frcmd, "ensure_configured", return_value=current
             ):
                 code = frcmd.move_config_dir(target_temp)
 
             self.assertEqual(code, 0)
             self.assertTrue((target / "QQ.lnk").exists())
-            self.assertTrue((target / "aliases.json").exists())
+            self.assertTrue((current / "aliases.json").exists())
             self.assertTrue((current / ".git").exists())
             self.assertTrue((current / "frcmd.py").exists())
+            self.assertFalse((target / "aliases.json").exists())
             self.assertFalse((target / ".git").exists())
             self.assertFalse((target / "frcmd.py").exists())
 
@@ -264,12 +331,17 @@ class ConfigTests(unittest.TestCase):
         with mock.patch.object(frcmd, "print_config_shortcuts", return_value=0) as print_shortcuts:
             print_code = frcmd.main(["-p"])
 
+        with mock.patch.object(frcmd, "prompt_add_alias", return_value=0) as prompt_add_alias:
+            alias_code = frcmd.main(["-a"])
+
         with mock.patch.object(frcmd, "move_config_dir", return_value=0) as move_config:
             move_code = frcmd.main(["-m", "D:\\FRcmdShortcuts"])
 
         self.assertEqual(print_code, 0)
+        self.assertEqual(alias_code, 0)
         self.assertEqual(move_code, 0)
         print_shortcuts.assert_called_once_with()
+        prompt_add_alias.assert_called_once_with()
         move_config.assert_called_once_with("D:\\FRcmdShortcuts")
 
     def test_main_rejects_move_command_with_missing_or_extra_path(self):

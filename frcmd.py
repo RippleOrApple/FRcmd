@@ -13,6 +13,7 @@ APP_NAME = "FRcmd"
 CONFIG_FILE = "config.json"
 ALIASES_FILE = "aliases.json"
 INDEX_FILE = "index.json"
+CONFIG_DIR_NAME = "config"
 SHORTCUT_DIR_NAME = "shortcuts"
 PINYIN_INITIAL_RANGES = (
     (-20319, "a"),
@@ -56,16 +57,46 @@ def app_data_dir() -> Path:
     return Path.home() / "AppData" / "Roaming" / APP_NAME
 
 
-def settings_path() -> Path:
+def install_dir() -> Path:
+    env_home = os.environ.get("FRCMD_HOME")
+    if env_home:
+        return Path(env_home).expanduser()
+
+    executable = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
+    parent = executable.parent
+    if parent.name.casefold() == "fr" and parent.parent.name.casefold() == "dist":
+        return parent.parent.parent
+    if parent.name.casefold() == "dist":
+        return parent.parent
+    return parent
+
+
+def config_dir() -> Path:
+    return install_dir() / CONFIG_DIR_NAME
+
+
+def legacy_settings_path() -> Path:
     return app_data_dir() / CONFIG_FILE
 
 
+def settings_path() -> Path:
+    return config_dir() / CONFIG_FILE
+
+
 def index_path() -> Path:
-    return app_data_dir() / INDEX_FILE
+    return config_dir() / INDEX_FILE
+
+
+def aliases_path() -> Path:
+    return config_dir() / ALIASES_FILE
+
+
+def legacy_aliases_path(shortcut_dir: Path) -> Path:
+    return shortcut_dir / ALIASES_FILE
 
 
 def default_shortcut_dir() -> Path:
-    return app_data_dir() / SHORTCUT_DIR_NAME
+    return install_dir() / SHORTCUT_DIR_NAME
 
 
 def normalize(value: str) -> str:
@@ -98,7 +129,11 @@ def pinyin_initials(value: str) -> str:
 def load_config() -> dict[str, str] | None:
     path = settings_path()
     if not path.exists():
-        return None
+        legacy_path = legacy_settings_path()
+        if legacy_path.exists():
+            path = legacy_path
+        else:
+            return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -120,8 +155,7 @@ def resolve_shortcut_dir(config: dict[str, str]) -> Path:
     return Path(os.path.expandvars(config["shortcut_dir"])).expanduser()
 
 
-def load_aliases(shortcut_dir: Path) -> dict[str, list[str]]:
-    path = shortcut_dir / ALIASES_FILE
+def read_alias_file(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -129,12 +163,40 @@ def load_aliases(shortcut_dir: Path) -> dict[str, list[str]]:
     except (OSError, json.JSONDecodeError):
         print(f"别名文件格式错误，已忽略：{path}")
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_aliases(shortcut_dir: Path) -> dict[str, list[str]]:
+    data: dict[str, object] = {}
+    data.update(read_alias_file(legacy_aliases_path(shortcut_dir)))
+    data.update(read_alias_file(aliases_path()))
 
     aliases: dict[str, list[str]] = {}
     for key, value in data.items():
         if isinstance(key, str) and isinstance(value, list):
             aliases[key] = [item for item in value if isinstance(item, str)]
     return aliases
+
+
+def save_aliases(aliases: dict[str, list[str]]) -> None:
+    path = aliases_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(aliases, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def add_alias(shortcut_name: str, alias: str, shortcut_dir: Path) -> bool:
+    clean_alias = alias.strip()
+    if not clean_alias:
+        return False
+
+    aliases = load_aliases(shortcut_dir)
+    values = aliases.setdefault(shortcut_name, [])
+    if any(normalize(value) == normalize(clean_alias) for value in values):
+        return False
+    values.append(clean_alias)
+    save_aliases(aliases)
+    build_shortcut_index(shortcut_dir)
+    return True
 
 
 def file_signature(path: Path) -> dict[str, int | None]:
@@ -157,7 +219,10 @@ def shortcut_names_signature(shortcut_dir: Path) -> list[str]:
 
 
 def aliases_signature(shortcut_dir: Path) -> dict[str, int | None]:
-    return file_signature(shortcut_dir / ALIASES_FILE)
+    return {
+        "config": file_signature(aliases_path()),
+        "legacy": file_signature(legacy_aliases_path(shortcut_dir)),
+    }
 
 
 def shortcut_match_keys(name: str, aliases: Iterable[str] = ()) -> tuple[str, ...]:
@@ -446,13 +511,54 @@ def print_config_shortcuts() -> int:
     return 0
 
 
+def prompt_add_alias() -> int:
+    shortcut_dir = ensure_configured()
+    if shortcut_dir is None:
+        return 1
+
+    shortcuts = list_shortcuts(shortcut_dir)
+    if not shortcuts:
+        transfer_shortcuts(shortcut_dir)
+        shortcuts = list_shortcuts(shortcut_dir)
+        if not shortcuts:
+            print(f"快捷方式目录中没有 .lnk 快捷方式：{shortcut_dir}")
+            return 1
+
+    query = input("请输入软件名：").strip()
+    if not query:
+        print("软件名不能为空。")
+        return 1
+
+    shortcut = match_shortcut(query, shortcuts)
+    if shortcut is None:
+        print(f"未找到：{query}")
+        return 1
+
+    answer = input(f"do you mean {shortcut.name}?(y/n) ").strip().casefold()
+    if answer != "y":
+        print("已取消设置别名。")
+        return 0
+
+    alias = input("请输入别名：").strip()
+    if not alias:
+        print("别名不能为空。")
+        return 1
+
+    if not add_alias(shortcut.name, alias, shortcut_dir):
+        print(f"别名已存在或无效：{alias}")
+        return 1
+
+    print(f"已为 {shortcut.name} 添加别名：{alias}")
+    return 0
+
+
 def config_dir_under_parent(raw_parent: str) -> Path:
     parent = Path(os.path.expandvars(raw_parent)).expanduser()
     return parent / SHORTCUT_DIR_NAME
 
 
 def is_managed_config_item(path: Path) -> bool:
-    return path.is_file() and (path.suffix.casefold() == ".lnk" or path.name == ALIASES_FILE)
+    return path.is_file() and path.suffix.casefold() == ".lnk"
 
 
 def move_config_dir(raw_target: str) -> int:
@@ -571,31 +677,27 @@ def launch_many(queries: list[str]) -> int:
 
 def print_help() -> None:
     print(
-        """FRcmd 使用说明：
-
-fr <软件名或简称> [软件名或简称...]
-  启动一个或多个软件。
-  示例：fr QQ
-  示例：fr QQ wyy
+        """FRcmd usage:
+fr <name-or-alias> [name-or-alias...]
+  Launch one or more applications. Example: fr QQ
+  Example: fr QQ wyy
 
 fr -c
-  初始化 FRcmd 配置目录。
-
+  Initialize FRcmd.
 fr -f
-  扫描桌面快捷方式，并添加到配置目录。
-
+  Scan desktop shortcuts into the active shortcut folder.
 fr -o
-  在文件管理器中打开 FRcmd 配置目录。
-
+  Open the active shortcut folder in File Explorer.
 fr -p
-  打印配置目录中存在的软件快捷方式。
-
-fr -m <路径名>
-  在指定路径下创建 shortcuts 文件夹，并将配置目录转移到那里。
-
+  Print shortcuts in the active shortcut folder.
+fr -a
+  Add an alias interactively.
+fr -m <parent-path>
+  Create a shortcuts folder under the parent path and move shortcuts there.
 fr help
-  显示帮助信息。"""
+  Show this help message."""
     )
+    return
 
 
 def print_command_error(message: str) -> int:
@@ -625,6 +727,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args == ["-p"]:
         return print_config_shortcuts()
+
+    if args == ["-a"]:
+        return prompt_add_alias()
 
     if args[0] == "-m" and len(args) != 2:
         return print_command_error("fr -m 需要且只需要一个路径参数。")
