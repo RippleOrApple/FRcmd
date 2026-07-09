@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.agents/
+shortcuts/
+build/
+dist/
+*.spec
+fr.exe
