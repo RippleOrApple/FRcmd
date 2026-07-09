@@ -677,27 +677,33 @@ def launch_many(queries: list[str]) -> int:
 
 def print_help() -> None:
     print(
-        """FRcmd usage:
-fr <name-or-alias> [name-or-alias...]
-  Launch one or more applications. Example: fr QQ
-  Example: fr QQ wyy
+        """FRcmd 使用说明：
+fr <软件名或简称> [软件名或简称...]
+  启动一个或多个软件。
+  示例：fr QQ
+  示例：fr QQ wyy
 
 fr -c
-  Initialize FRcmd.
+  初始化 FRcmd 配置。
+
 fr -f
-  Scan desktop shortcuts into the active shortcut folder.
+  扫描桌面快捷方式，并添加到当前快捷方式文件夹。
+
 fr -o
-  Open the active shortcut folder in File Explorer.
+  在文件管理器中打开当前快捷方式文件夹。
+
 fr -p
-  Print shortcuts in the active shortcut folder.
+  打印当前快捷方式文件夹中的软件快捷方式。
+
 fr -a
-  Add an alias interactively.
-fr -m <parent-path>
-  Create a shortcuts folder under the parent path and move shortcuts there.
+  交互式为软件添加别名。
+
+fr -m <父路径>
+  在指定父路径下创建 shortcuts 文件夹，并将快捷方式移动到那里。
+
 fr help
-  Show this help message."""
+  显示帮助信息。"""
     )
-    return
 
 
 def print_command_error(message: str) -> int:
