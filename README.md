@@ -1,8 +1,15 @@
 # FRcmd
 
-[中文](#中文) | [English](#english)
+<p align="center">
+  <a href="#中文"><kbd>中文</kbd></a>
+  <a href="#english"><kbd>English</kbd></a>
+</p>
 
 ## 中文
+
+<p align="right">
+  <a href="#english"><kbd>Switch to English</kbd></a>
+</p>
 
 FRcmd 是一个面向 Windows 的命令行软件启动器。它把常用软件的 `.lnk` 快捷方式集中到一个配置文件夹里，然后让你用命令快速启动软件。
 
@@ -319,6 +326,10 @@ D:\SomeParentFolder\shortcuts
 ```
 
 ## English
+
+<p align="right">
+  <a href="#中文"><kbd>切换到中文</kbd></a>
+</p>
 
 FRcmd is a Windows command-line launcher for desktop applications. It collects `.lnk` shortcuts into one managed shortcut folder and lets you start applications with short terminal commands.
 
