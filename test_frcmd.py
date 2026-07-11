@@ -30,6 +30,21 @@ class MatchShortcutTests(unittest.TestCase):
 
         self.assertEqual(frcmd.match_shortcut("wyy", shortcuts).name, NETEASE_MUSIC)
 
+    def test_exact_alias_wins_before_name_match(self):
+        shortcuts = [
+            frcmd.Shortcut("QQ", Path("QQ.lnk")),
+            frcmd.Shortcut(WECHAT, Path(f"{WECHAT}.lnk"), ("qq",)),
+        ]
+
+        self.assertEqual(frcmd.match_shortcut("qq", shortcuts).name, WECHAT)
+
+    def test_partial_alias_does_not_match(self):
+        shortcuts = [
+            frcmd.Shortcut(WECHAT, Path(f"{WECHAT}.lnk"), ("wechat",)),
+        ]
+
+        self.assertIsNone(frcmd.match_shortcut("wech", shortcuts))
+
     def test_case_insensitive(self):
         shortcuts = [frcmd.Shortcut("QQ", Path("QQ.lnk"), ("qq",))]
 

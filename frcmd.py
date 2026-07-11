@@ -334,8 +334,26 @@ def match_shortcut(query: str, shortcuts: Iterable[Shortcut]) -> Shortcut | None
 
     candidates = list(shortcuts)
 
+    alias_exact = [
+        shortcut
+        for shortcut in candidates
+        if any(normalize(alias) == wanted for alias in shortcut.aliases)
+    ]
+    if alias_exact:
+        return sorted(alias_exact, key=lambda shortcut: normalize(shortcut.name))[0]
+
     def keys(shortcut: Shortcut) -> tuple[str, ...]:
-        return shortcut.match_keys or shortcut_match_keys(shortcut.name, shortcut.aliases)
+        if shortcut.match_keys:
+            if not shortcut.aliases:
+                return shortcut.match_keys
+
+            alias_keys: set[str] = set()
+            for alias in shortcut.aliases:
+                alias_keys.add(normalize(alias))
+                alias_keys.add(normalize(pinyin_initials(alias)))
+            return tuple(key for key in shortcut.match_keys if normalize(key) not in alias_keys)
+
+        return shortcut_match_keys(shortcut.name)
 
     exact = [
         shortcut

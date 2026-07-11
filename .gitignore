@@ -5,5 +5,7 @@ config/
 shortcuts/
 build/
 dist/
+release/
+.release-build/
 *.spec
 fr.exe
